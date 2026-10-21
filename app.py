@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse
 
 from config import (
@@ -6,8 +7,8 @@ from config import (
     VK_CONFIRMATION_TOKEN,
     VK_SECRET,
 )
-from db import init_db, delete_conversation_id
-from openai_client import ask_openai
+from db import init_db, delete_history
+from openrouter_client import ask_openrouter
 from vk_client import send_vk_message
 
 app = FastAPI()
@@ -71,11 +72,11 @@ async def vk_callback(request: Request):
                 return "ok"
 
             if user_text.lower() == "/reset":
-                delete_conversation_id(from_id)
+                delete_history(from_id)
                 send_vk_message(peer_id, "Контекст диалога сброшен.")
                 return "ok"
 
-            answer = ask_openai(from_id, user_text)
+            answer = await run_in_threadpool(ask_openrouter, from_id, user_text)
 
             for chunk in split_long_text(answer):
                 send_vk_message(peer_id, chunk)

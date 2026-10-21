@@ -1,7 +1,7 @@
 import sqlite3
 from contextlib import contextmanager
 
-DB_PATH = "bot.db"
+from config import DB_PATH
 
 
 @contextmanager
@@ -16,36 +16,47 @@ def get_conn():
 
 def init_db():
     with get_conn() as conn:
-        conn.execute(""" 
-            CREATE TABLE IF NOT EXISTS user_conversations ( 
-                vk_user_id INTEGER PRIMARY KEY, 
-                conversation_id TEXT NOT NULL 
-            ) 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_turns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vk_user_id INTEGER NOT NULL,
+                user_text TEXT NOT NULL,
+                assistant_text TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS conversation_turns_user
+            ON conversation_turns (vk_user_id, id)
         """)
 
 
-def get_conversation_id(vk_user_id: int) -> str | None:
+def get_history(vk_user_id: int, max_turns: int) -> list[dict[str, str]]:
     with get_conn() as conn:
-        cur = conn.execute(
-            "SELECT conversation_id FROM user_conversations WHERE vk_user_id = ?",
-            (vk_user_id,)
-        )
-        row = cur.fetchone()
-        return row[0] if row else None
+        rows = conn.execute(
+            "SELECT user_text, assistant_text FROM conversation_turns "
+            "WHERE vk_user_id = ? ORDER BY id DESC LIMIT ?",
+            (vk_user_id, max_turns),
+        ).fetchall()
+    return [
+        {"role": role, "content": text}
+        for user_text, assistant_text in reversed(rows)
+        for role, text in (("user", user_text), ("assistant", assistant_text))
+    ]
 
 
-def save_conversation_id(vk_user_id: int, conversation_id: str) -> None:
-    with get_conn() as conn:
-        conn.execute(""" 
-            INSERT INTO user_conversations (vk_user_id, conversation_id) 
-            VALUES (?, ?) 
-            ON CONFLICT(vk_user_id) DO UPDATE SET conversation_id = excluded.conversation_id 
-        """, (vk_user_id, conversation_id))
-
-
-def delete_conversation_id(vk_user_id: int) -> None:
+def save_turn(vk_user_id: int, user_text: str, answer: str, max_turns: int) -> None:
     with get_conn() as conn:
         conn.execute(
-            "DELETE FROM user_conversations WHERE vk_user_id = ?",
-            (vk_user_id,)
+            "INSERT INTO conversation_turns (vk_user_id, user_text, assistant_text) "
+            "VALUES (?, ?, ?)", (vk_user_id, user_text, answer),
         )
+        conn.execute(
+            "DELETE FROM conversation_turns WHERE vk_user_id = ? AND id NOT IN "
+            "(SELECT id FROM conversation_turns WHERE vk_user_id = ? "
+            "ORDER BY id DESC LIMIT ?)", (vk_user_id, vk_user_id, max_turns),
+        )
+
+
+def delete_history(vk_user_id: int) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM conversation_turns WHERE vk_user_id = ?", (vk_user_id,))
